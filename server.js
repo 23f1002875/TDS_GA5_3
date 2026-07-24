@@ -16,8 +16,6 @@ function respond(res, decision, reason) {
 
 // ---------- path helpers ----------
 
-// Normalize a path-like token (which may contain $HOME, ~, or be relative)
-// against a given cwd, returning an absolute, dot-resolved path.
 function stripTrailingSlash(p) {
   if (p.length > 1 && p.endsWith(path.sep)) {
     return p.slice(0, -1);
@@ -31,13 +29,10 @@ function normalizePath(rawPath, cwd) {
   p = p.replace(/\$\{HOME\}/g, HOME).replace(/\$HOME/g, HOME);
   if (p === '~') p = HOME;
   else if (p.startsWith('~/')) p = HOME + p.slice(1);
-  // path.resolve always fully normalizes AND strips trailing slashes,
-  // regardless of whether the input is absolute or relative.
   p = path.resolve(cwd, p);
   return p;
 }
 
-// Strict containment check: is `resolvedPath` equal to or inside `dir`?
 function isPathInsideOrEqual(resolvedPath, dir) {
   const normDir = stripTrailingSlash(path.resolve(dir));
   const normPath = stripTrailingSlash(path.resolve(resolvedPath));
@@ -60,8 +55,6 @@ function extractBase64Decodes(str) {
   return decoded;
 }
 
-// Split a shell command into path-ish tokens, stripping common shell
-// metacharacters/operators/quotes.
 function tokenize(command) {
   return command
     .split(/[\s;|&()"'`<>]+/)
@@ -69,22 +62,15 @@ function tokenize(command) {
     .filter(Boolean);
 }
 
-// Does a single command string (already expanded for $HOME/~) reference
-// the forbidden file, when tokens are resolved against plausible cwds?
 function commandLayerHitsForbiddenFile(layer) {
-  // Fast path: literal absolute forbidden path appears verbatim.
   const expanded = layer
     .replace(/\$\{HOME\}/g, HOME)
     .replace(/\$HOME/g, HOME)
     .replace(/~(?=\/|\s|$)/g, HOME);
 
   if (expanded.includes(FORBIDDEN_FILE)) return true;
-
   if (!expanded.includes('credentials.env')) return false;
 
-  // Only resolve tokens that actually mention the filename, and only
-  // block if they truly resolve to the exact forbidden path — not merely
-  // because the substring appears (e.g. "credentials.env.bak" is fine).
   const tokens = tokenize(expanded);
   for (const tok of tokens) {
     if (!tok.includes('credentials.env')) continue;
@@ -123,20 +109,32 @@ function handleBash(command) {
   return { decision: 'allow', reason: 'Command does not access the restricted credentials file.' };
 }
 
+// Does the raw path (after $HOME/~ expansion, before resolution) contain a
+// literal ".." path segment? Legitimate writes never need one, so any use
+// of ".." — even if it would lexically resolve back inside BUILD_DIR — is
+// treated as an escape attempt and blocked outright.
+function containsDotDotSegment(rawPath) {
+  let p = rawPath.trim().replace(/^["']|["']$/g, '');
+  p = p.replace(/\$\{HOME\}/g, HOME).replace(/\$HOME/g, HOME);
+  if (p === '~') p = HOME;
+  else if (p.startsWith('~/')) p = HOME + p.slice(1);
+  return p.split(/[\/\\]+/).includes('..');
+}
+
 function handleWriteFile(rawPath) {
   if (typeof rawPath !== 'string' || rawPath.length === 0) {
     return { decision: 'block', reason: 'Malformed write path.' };
   }
+  if (containsDotDotSegment(rawPath)) {
+    return { decision: 'block', reason: 'Write path uses ".." traversal, which is not permitted.' };
+  }
   const resolved = normalizePath(rawPath, WORKSPACE);
-
   if (resolved === FORBIDDEN_FILE) {
     return { decision: 'block', reason: 'Refusing to write to the restricted credentials file.' };
   }
-
   if (isPathInsideOrEqual(resolved, BUILD_DIR)) {
     return { decision: 'allow', reason: 'Write target is inside the allowed build directory.' };
   }
-
   return { decision: 'block', reason: 'Write target is outside the allowed build directory.' };
 }
 
