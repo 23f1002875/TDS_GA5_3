@@ -18,24 +18,29 @@ function respond(res, decision, reason) {
 
 // Normalize a path-like token (which may contain $HOME, ~, or be relative)
 // against a given cwd, returning an absolute, dot-resolved path.
+function stripTrailingSlash(p) {
+  if (p.length > 1 && p.endsWith(path.sep)) {
+    return p.slice(0, -1);
+  }
+  return p;
+}
+
 function normalizePath(rawPath, cwd) {
   let p = rawPath.trim();
   p = p.replace(/^["']|["']$/g, ''); // strip surrounding quotes
   p = p.replace(/\$\{HOME\}/g, HOME).replace(/\$HOME/g, HOME);
   if (p === '~') p = HOME;
   else if (p.startsWith('~/')) p = HOME + p.slice(1);
-  if (!path.isAbsolute(p)) {
-    p = path.resolve(cwd, p);
-  } else {
-    p = path.normalize(p);
-  }
+  // path.resolve always fully normalizes AND strips trailing slashes,
+  // regardless of whether the input is absolute or relative.
+  p = path.resolve(cwd, p);
   return p;
 }
 
 // Strict containment check: is `resolvedPath` equal to or inside `dir`?
 function isPathInsideOrEqual(resolvedPath, dir) {
-  const normDir = path.normalize(dir);
-  const normPath = path.normalize(resolvedPath);
+  const normDir = stripTrailingSlash(path.resolve(dir));
+  const normPath = stripTrailingSlash(path.resolve(resolvedPath));
   if (normPath === normDir) return true;
   const rel = path.relative(normDir, normPath);
   return rel !== '' && !rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel);
